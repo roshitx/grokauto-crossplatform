@@ -1,0 +1,20 @@
+{
+  "email_provider": "cloudflare",
+  "cloudflare_api_base": "https://cf-temp-email.auliarasyidalzahrawi.workers.dev",
+  "cloudflare_api_key": "R0SH1T_T3MP_M41L_2026",
+  "cloudflare_auth_mode": "x-admin-auth",
+  "cloudflare_path_domains": "/api/domains",
+  "cloudflare_path_accounts": "/admin/new_address",
+  "cloudflare_path_token": "/api/token",
+  "cloudflare_path_messages": "/api/mails",
+  "cloudflare_domains": ["roshit.site", "copass.my.id", "rosit.web.id", "roshit.web.id", "prabowokontol.web.id"],
+  "cloudflare_default_domain": "roshit.site",
+  "register_count": 1,
+  "worker_count": 1,
+  "grok2api_pool_name": "ssoBasic",
+  "headless": false,
+  "browser_restart_every": 10,
+  "enable_nsfw": true,
+  "cpa_export_enabled": false,
+  "cpa_mint_async": true
+}
