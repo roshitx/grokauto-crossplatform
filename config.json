@@ -24,5 +24,6 @@
   "cpa_export_enabled": false,
   "cpa_mint_async": true,
   "proxy": "",
-  "captcha_api_key": ""
+  "captcha_api_key": "",
+  "browser_type": "camoufox"
 }
