@@ -80,10 +80,19 @@ def create_browser_options():
     _ensure_drissionpage()
     opts = ChromiumOptions()
     opts.set_argument("--no-sandbox")
+    opts.set_argument("--disable-dev-shm-usage")
+    opts.set_argument("--disable-gpu")
     opts.set_argument("--disable-blink-features=AutomationControlled")
+    # Anti-detection: realistic user agent
+    opts.set_argument("--disable-features=IsolateOrigins,site-per-process")
+    opts.set_user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
     profile_dir = config.get("profile_dir", "")
     if profile_dir:
         opts.set_user_data_path(profile_dir)
+    # Proxy from config
+    proxy = config.get("proxy", "")
+    if proxy:
+        opts.set_argument(f"--proxy-server={proxy}")
     # Headless from config
     if config.get("headless", False):
         opts.headless()
