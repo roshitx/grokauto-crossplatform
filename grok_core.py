@@ -562,6 +562,9 @@ __all__ = [
     # Utilities
     "clean_code", "clean_exc", "clean_html", "build_profile", "run_js",
     "run_registration_cli",
+    # CLI + License
+    "main_cli", "reset_9router_connections_status",
+    "get_hwid", "get_log_level",
 ]
 
 # Load config on import
