@@ -389,20 +389,71 @@ def fill_code_and_submit(email: str, dev_token: str, log_callback: Callable = No
         raise Exception("Browser not started")
 
     # Poll for code
-    code = cloudflare_get_oai_code(email, jwt=dev_token, max_wait=60)
+    code = cloudflare_get_oai_code(email, jwt=dev_token, max_wait=90)
     log(f"[+] Verification code: {code}")
 
-    # Fill code field
+    # x.ai uses individual char inputs (maxlength="1" each)
+    # Code format: "W0M-UN4" → type each char into separate input
+    code_clean = code.replace("-", "")
     try:
-        code_input = page.ele("css:input[type='text']")
-        if code_input:
-            code_input.clear()
-            code_input.input(code)
-            time.sleep(0.5)
+        # Strategy 1: individual maxlength=1 inputs (OTP style)
+        char_inputs = page.eles("css:input[maxlength='1']")
+        if not char_inputs:
+            char_inputs = page.eles("css:input[autocomplete='one-time-code']")
+        if not char_inputs:
+            # Try all text inputs that are short
+            all_inputs = page.eles("css:input[type='text']")
+            char_inputs = [i for i in all_inputs if (i.attr("maxlength") or "1") == "1"]
+
+        if char_inputs and len(char_inputs) >= len(code_clean):
+            log(f"[+] Found {len(char_inputs)} OTP inputs, typing code...")
+            for idx, ch in enumerate(code_clean):
+                if idx < len(char_inputs):
+                    char_inputs[idx].click()
+                    char_inputs[idx].input(ch)
+                    time.sleep(0.1)
+            time.sleep(1)
+            # Click submit
             btn = page.ele("css:button[type='submit']")
+            if not btn:
+                btn = page.ele("text=Next")
+            if not btn:
+                btn = page.ele("text=Verify")
+            if not btn:
+                btn = page.ele("text=Continue")
             if btn:
                 btn.click()
-                time.sleep(2)
+                time.sleep(3)
+                log("[+] Code submitted")
+            else:
+                log("[!] Submit button not found")
+        else:
+            # Strategy 2: single text input (fallback)
+            log(f"[+] Using single input fallback ({len(char_inputs)} OTP inputs found)")
+            code_input = page.ele("css:input[type='text']")
+            if not code_input:
+                code_input = page.ele("css:input[type='tel']")
+            if not code_input:
+                code_input = page.ele("css:input[autocomplete='one-time-code']")
+            if code_input:
+                code_input.clear()
+                code_input.input(code_clean)
+                time.sleep(1)
+                btn = page.ele("css:button[type='submit']")
+                if not btn:
+                    btn = page.ele("text=Next")
+                if not btn:
+                    btn = page.ele("text=Verify")
+                if not btn:
+                    btn = page.ele("text=Continue")
+                if btn:
+                    btn.click()
+                    time.sleep(3)
+                    log("[+] Code submitted")
+                else:
+                    log("[!] Submit button not found")
+            else:
+                log("[!] No code input found")
     except Exception as e:
         log(f"[!] Error filling code: {e}")
         raise
