@@ -566,3 +566,64 @@ __all__ = [
 
 # Load config on import
 load_config()
+
+# ── Missing functions (discovered via import analysis) ─────────
+def main_cli():
+    """CLI registration loop."""
+    global config
+    config = load_config()
+    count = config.get("register_count", 1)
+    worker_count = config.get("worker_count", 1)
+    log = print
+
+    log(f"[*] Starting CLI registration: {count} accounts, {worker_count} workers")
+    start_browser(log_callback=log)
+
+    success = 0
+    for i in range(count):
+        try:
+            log(f"\n{'='*50}")
+            log(f"[*] Account {i+1}/{count}")
+            log(f"{'='*50}")
+
+            open_signup_page(log_callback=log)
+            email, dev_token = fill_email_and_submit(log_callback=log)
+            log(f"[+] Email: {email}")
+
+            code = fill_code_and_submit(email, dev_token, log_callback=log)
+            log(f"[+] Code: {code}")
+
+            profile = fill_profile_and_submit(log_callback=log)
+            log(f"[+] Profile: {profile.get('given_name')} {profile.get('family_name')}")
+
+            sso = wait_for_sso_cookie(log_callback=log)
+            log(f"[+] SSO: {sso[:30]}...")
+
+            add_token_to_grok2api_pools(sso, email=email, log_callback=log)
+            add_token_to_token_only_file(sso, log_callback=log)
+
+            success += 1
+            log(f"[+] Account {i+1} done!")
+
+        except Exception as e:
+            log(f"[!] Account {i+1} failed: {e}")
+            restart_browser(log_callback=log)
+
+    stop_browser(log_callback=log)
+    log(f"\n[*] Done: {success}/{count} accounts registered")
+
+def reset_9router_connections_status(callback=None):
+    """Stub — 9router integration not implemented."""
+    if callback:
+        callback("[*] 9router status reset (stub)")
+
+def get_hwid():
+    """Get hardware ID for license."""
+    import platform
+    import hashlib
+    data = f"{platform.node()}-{platform.machine()}-{platform.system()}"
+    return hashlib.md5(data.encode()).hexdigest()[:16]
+
+def get_log_level():
+    """Get configured log level."""
+    return config.get("log_level", "info")
