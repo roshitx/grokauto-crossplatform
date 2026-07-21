@@ -82,27 +82,89 @@ def create_browser_options():
     opts.set_argument("--no-sandbox")
     opts.set_argument("--disable-dev-shm-usage")
     opts.set_argument("--disable-gpu")
+    
+    # ── Anti-detection flags ──────────────────────────────
     opts.set_argument("--disable-blink-features=AutomationControlled")
-    # Anti-detection: realistic user agent
     opts.set_argument("--disable-features=IsolateOrigins,site-per-process")
-    opts.set_user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+    opts.set_argument("--disable-infobars")
+    opts.set_argument("--disable-extensions")
+    opts.set_argument("--disable-component-update")
+    opts.set_argument("--no-first-run")
+    opts.set_argument("--no-default-browser-check")
+    opts.set_argument("--disable-background-networking")
+    opts.set_argument("--disable-sync")
+    opts.set_argument("--metrics-recording-only")
+    opts.set_argument("--safebrowsing-disable-auto-update")
+    
+    # Realistic user agent (match your actual Chrome version)
+    opts.set_user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36")
+    
+    # Use REAL Chrome profile if available (not fresh one)
+    # This gives real cookies, history, fingerprint
     profile_dir = config.get("profile_dir", "")
     if profile_dir:
         opts.set_user_data_path(profile_dir)
+    else:
+        # Default: use a persistent profile that builds up real fingerprint
+        default_profile = os.path.expanduser("~/.grokauto_profile")
+        os.makedirs(default_profile, exist_ok=True)
+        opts.set_user_data_path(default_profile)
+    
     # Proxy from config — DataImpulse format: host:port:user:pass
     proxy = config.get("proxy", "")
     if proxy:
         parts = proxy.split(":")
         if len(parts) == 4:
-            # host:port:user:pass → set proxy-server without auth, auth handled via CDP
             opts.set_argument(f"--proxy-server={parts[0]}:{parts[1]}")
         else:
-            # Already formatted (e.g. http://host:port)
             opts.set_argument(f"--proxy-server={proxy}")
+    
     # Headless from config
     if config.get("headless", False):
         opts.headless()
     return opts
+
+
+def _patch_browser_stealth(page):
+    """Apply stealth patches after browser starts to hide automation signals."""
+    try:
+        page.run_js("""
+            // Hide webdriver property
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+            });
+            
+            // Override navigator.plugins (empty = suspicious)
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            
+            // Override navigator.languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
+            
+            // Override chrome.runtime (headless detection)
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {},
+            };
+            
+            // Override permissions query
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+            
+            // Remove automation-related console warnings
+            delete navigator.__proto__.webdriver;
+        """)
+    except Exception:
+        pass
 
 def _setup_proxy_auth(page):
     """Set proxy auth via CDP for DataImpulse (host:port:user:pass format)."""
@@ -133,7 +195,8 @@ def start_browser(log_callback: Callable = None) -> ChromiumPage:
     opts = create_browser_options()
     _browser = ChromiumPage(opts)
     _setup_proxy_auth(_browser)
-    log("[+] Browser started")
+    _patch_browser_stealth(_browser)
+    log("[+] Browser started (stealth mode)")
     return _browser
 
 def stop_browser(log_callback: Callable = None) -> None:
