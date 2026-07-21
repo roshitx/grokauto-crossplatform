@@ -20,7 +20,7 @@ def cloudflare_create_temp_address(cfg):
     api_key = cfg.get("cloudflare_api_key", "R0SH1T_T3MP_M41L_2026")
     
     # Get domains
-    r = requests.get(f"{base}/open_api/settings/domains",
+    r = requests.get(f"{base}/open_api/settings",
         headers={"x-admin-auth": api_key}, timeout=30)
     log(f"[*] Domains API: {r.status_code}")
     
@@ -40,9 +40,9 @@ def cloudflare_create_temp_address(cfg):
     address = f"{prefix}@{domain}"
     
     # Create address
-    r = requests.post(f"{base}/open_api/settings/accounts",
+    r = requests.post(f"{base}/admin/new_address",
         headers={"x-admin-auth": api_key, "Content-Type": "application/json"},
-        json={"address": address, "password": "auto"}, timeout=30)
+        json={"name": address, "password": "auto"}, timeout=30)
     
     log(f"[*] Create API: {r.status_code}")
     
@@ -54,7 +54,7 @@ def cloudflare_create_temp_address(cfg):
     except:
         jwt = ""
     
-    return {"jwt": jwt, "address": address}
+    return {"jwt": jwt, "name": address}
 
 def main():
     cfg = load_config()
