@@ -273,11 +273,25 @@ def cloudflare_get_oai_code(address: str, jwt: str = "", cfg: dict = None, max_w
             data = r.json()
             results = data.get("results", [])
             for msg in results:
-                body = msg.get("body", "") or msg.get("text", "") or msg.get("html", "")
-                # Extract 6-digit code
-                codes = re.findall(r'\b(\d{6})\b', body)
-                if codes:
-                    return codes[0]
+                body = msg.get("body", "") or msg.get("text", "") or msg.get("html", "") or msg.get("raw", "")
+                # Extract subject from raw email headers
+                subject = ""
+                sub_match = re.search(r'Subject:\s*([^\r\n]+)', msg.get("raw", ""))
+                if sub_match:
+                    subject = sub_match.group(1).strip()
+                # Extract xAI verification code: alphanumeric like P0W-KXG
+                # Try Subject first: "SpaceXAI confirmation code: P0W-KXG"
+                m = re.search(r'confirmation code[:\s]+([A-Z0-9]{3}-[A-Z0-9]{3})', subject, re.I)
+                if not m:
+                    m = re.search(r'confirmation code[:\s]+([A-Z0-9]{3}-[A-Z0-9]{3})', body, re.I)
+                if not m:
+                    # Try bold table cell: font-weight:bold;">P0W-KXG</td>
+                    m = re.search(r'font-weight:\s*bold[^>]*>([A-Z0-9]{3}-[A-Z0-9]{3})<', body, re.I)
+                if not m:
+                    # Fallback: any 3-3 alphanumeric code
+                    m = re.search(r'\b([A-Z0-9]{3}-[A-Z0-9]{3})\b', body, re.I)
+                if m:
+                    return m.group(1)
         time.sleep(2)
     raise Exception("Tidak menerima kode verifikasi dalam waktu yang ditentukan")
 
