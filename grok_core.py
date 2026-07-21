@@ -211,7 +211,7 @@ def cloudflare_get_domains(cfg: dict = None) -> list[str]:
     headers = cloudflare_build_headers(c)
     # For admin auth, we need a JWT first — use settings endpoint
     settings_path = "/open_api/settings"
-    r = requests.get(f"{base}{settings_path}", headers=headers, timeout=10)
+    r = requests.get(f"{base}{settings_path}", headers=headers, timeout=30)
     r.raise_for_status()
     data = r.json()
     return data.get("domains", [])
@@ -234,7 +234,7 @@ def cloudflare_create_temp_address(domain: str = "", cfg: dict = None) -> dict:
     # Generate random local part
     local = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
     body = {"enablePrefix": True, "name": local, "domain": domain}
-    r = requests.post(f"{base}{path}", json=body, headers=headers, timeout=10)
+    r = requests.post(f"{base}{path}", json=body, headers=headers, timeout=30)
     r.raise_for_status()
     return r.json()  # {"jwt": "...", "address": "...", "address_id": 1}
 
@@ -248,7 +248,7 @@ def cloudflare_get_messages(address: str = "", jwt: str = "", cfg: dict = None) 
     base = c["cloudflare_api_base"].rstrip("/")
     path = c.get("cloudflare_path_messages", "/api/mails")
     headers = {"Authorization": f"Bearer {jwt}"}
-    r = requests.get(f"{base}{path}?limit=10&offset=0", headers=headers, timeout=10)
+    r = requests.get(f"{base}{path}?limit=10&offset=0", headers=headers, timeout=30)
     r.raise_for_status()
     return r.json()
 
@@ -257,7 +257,7 @@ def cloudflare_get_message_detail(message_id: str, jwt: str = "", cfg: dict = No
     import requests
     base = c["cloudflare_api_base"].rstrip("/")
     headers = {"Authorization": f"Bearer {jwt}"}
-    r = requests.get(f"{base}/api/mail/{message_id}", headers=headers, timeout=10)
+    r = requests.get(f"{base}/api/mail/{message_id}", headers=headers, timeout=30)
     r.raise_for_status()
     return r.json()
 
@@ -268,7 +268,7 @@ def cloudflare_get_oai_code(address: str, jwt: str = "", cfg: dict = None, max_w
     base = c["cloudflare_api_base"].rstrip("/")
     headers = {"Authorization": f"Bearer {jwt}"}
     for _ in range(max_wait):
-        r = requests.get(f"{base}/api/mails?limit=5&offset=0", headers=headers, timeout=10)
+        r = requests.get(f"{base}/api/mails?limit=5&offset=0", headers=headers, timeout=30)
         if r.ok:
             data = r.json()
             results = data.get("results", [])
@@ -486,7 +486,7 @@ def enable_nsfw_for_token(token: str, log_callback: Callable = None) -> tuple[bo
             "https://grok.com/rest/user/preferences",
             json={"isEnhancedDataEnabled": True},
             headers=headers,
-            timeout=10
+            timeout=30
         )
         if r.ok:
             return True, "NSFW enabled"
