@@ -341,7 +341,7 @@ def fill_email_and_submit(log_callback: Callable = None, cancel_callback: Callab
     # Fill email field on x.ai signup page
     try:
         email_input = page.ele("css:input[type='email']")
-        if not email_input or not email_input.el:
+        if not email_input:
             # Try text input as fallback
             email_input = page.ele("css:input[type='text']")
         if email_input:
