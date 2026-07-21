@@ -23,5 +23,6 @@
   "enable_nsfw": true,
   "cpa_export_enabled": false,
   "cpa_mint_async": true,
-  "proxy": ""
+  "proxy": "",
+  "captcha_api_key": ""
 }

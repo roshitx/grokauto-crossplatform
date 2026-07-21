@@ -308,6 +308,106 @@ def cloudflare_is_admin_create_path(cfg: dict = None) -> bool:
     c = cfg or config
     return "admin" in c.get("cloudflare_path_accounts", "")
 
+# ── 2captcha Turnstile Solver ──────────────────────────────
+def solve_turnstile_2captcha(sitekey: str, page_url: str, cfg: dict = None) -> str:
+    """Solve Cloudflare Turnstile via 2captcha API. Returns token string."""
+    import requests
+    c = cfg or config
+    api_key = c.get("captcha_api_key", "")
+    if not api_key:
+        raise Exception("captcha_api_key not set in config.json")
+    
+    # Submit task
+    payload = {
+        "clientKey": api_key,
+        "task": {
+            "type": "TurnstileTaskProxyless",
+            "websiteURL": page_url,
+            "websiteKey": sitekey,
+        }
+    }
+    proxy = c.get("proxy", "")
+    if proxy:
+        # Parse proxy: host:port:user:pass or http://...
+        parts = proxy.split(":")
+        if len(parts) == 4:
+            payload["task"]["proxyType"] = "http"
+            payload["task"]["proxyAddress"] = parts[0]
+            payload["task"]["proxyPort"] = int(parts[1])
+            payload["task"]["proxyLogin"] = parts[2]
+            payload["task"]["proxyPassword"] = parts[3]
+    
+    r = requests.post("https://api.2captcha.com/createTask", json=payload, timeout=30)
+    resp = r.json()
+    if resp.get("errorId", 0) != 0:
+        raise Exception(f"2captcha createTask error: {resp.get('errorDescription', resp)}")
+    
+    task_id = resp["taskId"]
+    
+    # Poll for result
+    for _ in range(60):  # max 120s
+        time.sleep(2)
+        r = requests.post("https://api.2captcha.com/getTaskResult", json={
+            "clientKey": api_key,
+            "taskId": task_id
+        }, timeout=30)
+        result = r.json()
+        if result.get("status") == "ready":
+            token = result.get("solution", {}).get("token", "")
+            if token:
+                return token
+        if result.get("errorId", 0) != 0:
+            raise Exception(f"2captcha getTaskResult error: {result.get('errorDescription', result)}")
+    
+    raise Exception("2captcha Turnstile solve timeout (120s)")
+
+def inject_turnstile_token(page, token: str, log_callback: Callable = None) -> bool:
+    """Inject solved Turnstile token into the page's hidden field."""
+    log = log_callback or _noop_log
+    
+    # Strategy 1: set the cf-turnstile-response input
+    try:
+        resp_field = page.ele("css:input[name='cf-turnstile-response']")
+        if resp_field:
+            page.run_js(f"""
+                const el = document.querySelector("input[name='cf-turnstile-response']");
+                if (el) {{
+                    el.value = '{token}';
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }}
+            """)
+            log("[+] Turnstile token injected via cf-turnstile-response")
+            return True
+    except Exception as e:
+        log(f"[!] cf-turnstile-response inject failed: {e}")
+    
+    # Strategy 2: set callback function
+    try:
+        page.run_js(f"""
+            if (window.turnstile) {{
+                // Try to find the callback
+                const widgets = document.querySelectorAll('[data-sitekey]');
+                widgets.forEach(w => {{
+                    const sitekey = w.getAttribute('data-sitekey');
+                    // Trigger turnstile callback with token
+                    if (window._turnstileCallback) {{
+                        window._turnstileCallback('{token}');
+                    }}
+                }});
+            }}
+            // Also try setting __turnstileResp
+            if (window.__turnstileResp !== undefined) {{
+                window.__turnstileResp = '{token}';
+            }}
+        """)
+        log("[+] Turnstile token injected via JS callback")
+        return True
+    except Exception as e:
+        log(f"[!] JS callback inject failed: {e}")
+    
+    return False
+
 # ── Registration Flow (browser automation) ────────────────────
 def open_signup_page(log_callback: Callable = None, cancel_callback: Callable = None) -> None:
     log = log_callback or _noop_log
@@ -495,6 +595,39 @@ def fill_profile_and_submit(log_callback: Callable = None, cancel_callback: Call
             pw_input.clear()
             pw_input.input(password)
 
+        # Solve Turnstile before submit
+        api_key = config.get("captcha_api_key", "")
+        if api_key:
+            try:
+                # Detect Turnstile sitekey
+                sitekey = None
+                sitekey_el = page.ele("css:[data-sitekey]")
+                if sitekey_el:
+                    sitekey = sitekey_el.attr("data-sitekey")
+                    log(f"[+] Turnstile sitekey: {sitekey}")
+                
+                if not sitekey:
+                    # Try to find in HTML
+                    import re
+                    html = page.html
+                    m = re.search(r'data-sitekey="([^"]+)"', html)
+                    if m:
+                        sitekey = m.group(1)
+                        log(f"[+] Turnstile sitekey from HTML: {sitekey}")
+                
+                if sitekey:
+                    page_url = page.url
+                    log(f"[+] Solving Turnstile via 2captcha...")
+                    token = solve_turnstile_2captcha(sitekey, page_url)
+                    log(f"[+] Turnstile token obtained ({len(token)} chars)")
+                    inject_turnstile_token(page, token, log_callback=log)
+                    time.sleep(2)
+                else:
+                    log("[!] No Turnstile sitekey found, proceeding without solve")
+            except Exception as e:
+                log(f"[!] Turnstile solve failed: {e}")
+                log("[!] Proceeding without Turnstile token")
+        
         # Submit
         btn = page.ele("css:button[type='submit']")
         if btn:
