@@ -18,10 +18,10 @@
   "register_count": 1,
   "worker_count": 1,
   "grok2api_pool_name": "ssoBasic",
-  "headless": false,
+  "headless": true,
   "browser_restart_every": 10,
   "enable_nsfw": true,
   "cpa_export_enabled": false,
   "cpa_mint_async": true,
-  "proxy": ""
+  "proxy": "http://127.0.0.1:8888"
 }

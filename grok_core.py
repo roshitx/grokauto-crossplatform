@@ -89,20 +89,50 @@ def create_browser_options():
     profile_dir = config.get("profile_dir", "")
     if profile_dir:
         opts.set_user_data_path(profile_dir)
-    # Proxy from config
+    # Proxy from config — DataImpulse format: host:port:user:pass
     proxy = config.get("proxy", "")
     if proxy:
-        opts.set_argument(f"--proxy-server={proxy}")
+        parts = proxy.split(":")
+        if len(parts) == 4:
+            # host:port:user:pass → set proxy-server without auth, auth handled via CDP
+            opts.set_argument(f"--proxy-server={parts[0]}:{parts[1]}")
+        else:
+            # Already formatted (e.g. http://host:port)
+            opts.set_argument(f"--proxy-server={proxy}")
     # Headless from config
     if config.get("headless", False):
         opts.headless()
     return opts
+
+def _setup_proxy_auth(page):
+    """Set proxy auth via CDP for DataImpulse (host:port:user:pass format)."""
+    proxy = config.get("proxy", "")
+    if not proxy:
+        return
+    parts = proxy.split(":")
+    if len(parts) != 4:
+        return
+    user, pwd = parts[2], parts[3]
+    auth = f"{user}:{pwd}"
+    import base64
+    encoded = base64.b64encode(auth.encode()).decode()
+    js = f"""
+    const encoded = '{encoded}';
+    const decoded = atob(encoded);
+    const [username, password] = decoded.split(':');
+    window.__proxy_auth = {{username, password}};
+    """
+    try:
+        page.run_js(js)
+    except Exception:
+        pass
 
 def start_browser(log_callback: Callable = None) -> ChromiumPage:
     global _browser
     log = log_callback or _noop_log
     opts = create_browser_options()
     _browser = ChromiumPage(opts)
+    _setup_proxy_auth(_browser)
     log("[+] Browser started")
     return _browser
 
@@ -271,7 +301,16 @@ def open_signup_page(log_callback: Callable = None, cancel_callback: Callable = 
     if not page:
         raise Exception("Browser not started")
     page.get(SIGNUP_URL)
-    time.sleep(3)
+    time.sleep(8)  # Wait for JS to render
+    # Accept cookies if banner present
+    try:
+        cookie_btn = page.ele("text=Accept All Cookies")
+        if cookie_btn:
+            cookie_btn.click()
+            time.sleep(1)
+            log("[+] Cookies accepted")
+    except Exception:
+        pass
     log("[+] Signup page opened")
 
 def fill_email_and_submit(log_callback: Callable = None, cancel_callback: Callable = None) -> tuple[str, str]:
@@ -287,18 +326,41 @@ def fill_email_and_submit(log_callback: Callable = None, cancel_callback: Callab
     jwt = result.get("jwt", "")
     log(f"[+] Temp email created: {email}")
 
+    # Click "Sign up with email" button first
+    try:
+        email_btn = page.ele("text=Sign up with email")
+        if email_btn:
+            email_btn.click()
+            time.sleep(3)
+            log("[+] Clicked 'Sign up with email'")
+        else:
+            log("[!] 'Sign up with email' button not found, trying direct input")
+    except Exception as e:
+        log(f"[!] Error clicking email button: {e}")
+
     # Fill email field on x.ai signup page
     try:
         email_input = page.ele("css:input[type='email']")
+        if not email_input or not email_input.el:
+            # Try text input as fallback
+            email_input = page.ele("css:input[type='text']")
         if email_input:
             email_input.clear()
             email_input.input(email)
             time.sleep(0.5)
             # Click submit/next button
             btn = page.ele("css:button[type='submit']")
+            if not btn:
+                # Try "Next" button
+                btn = page.ele("text=Next")
             if btn:
                 btn.click()
-                time.sleep(2)
+                time.sleep(3)
+                log("[+] Email submitted")
+            else:
+                log("[!] Submit button not found")
+        else:
+            log("[!] Email input not found")
     except Exception as e:
         log(f"[!] Error filling email: {e}")
         raise
