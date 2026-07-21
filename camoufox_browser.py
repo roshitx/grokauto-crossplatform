@@ -185,54 +185,152 @@ def fill_profile_and_submit(log_callback=None):
     log(f"[+] Profile: {first} {last}")
     time.sleep(2)
     
-    # Wait for Turnstile
-    log("[*] Waiting for Turnstile...")
-    try:
-        page.wait_for_selector("iframe[src*='challenges.cloudflare.com']", timeout=15000)
-        log("[+] Turnstile loaded")
-        time.sleep(3)
-        
-        # Click checkbox inside Turnstile iframe
-        tf = page.frame_locator("iframe[src*='challenges.cloudflare.com']")
-        try:
-            tf.locator("input[type='checkbox']").click(timeout=5000)
-            log("[+] Turnstile checkbox clicked")
-        except:
-            try:
-                tf.locator("body").click(timeout=5000)
-                log("[+] Turnstile body clicked")
-            except:
-                log("[!] Could not click Turnstile")
-        time.sleep(5)
-        
-        # Check auto-solve
-        token_el = page.locator("input[name='cf-turnstile-response']")
-        if token_el.count() > 0:
-            val = token_el.get_attribute("value") or ""
-            if len(val) > 10:
-                log(f"[+] Turnstile auto-solved! Token: {val[:30]}...")
-            else:
-                log("[!] Turnstile not auto-solved")
-                # Try 2captcha
-                api_key = _config.get("captcha_api_key", "")
-                if api_key:
-                    log("[+] Solving via 2captcha...")
-                    sitekey = _find_sitekey(page)
-                    if sitekey:
-                        token = _solve_2captcha(sitekey, page.url)
-                        page.evaluate(f"document.querySelector('input[name=\"cf-turnstile-response\"]').value = '{token}'")
-                        log(f"[+] Token injected: {token[:30]}...")
-                else:
-                    log("[!] No captcha_api_key set")
-    except Exception as e:
-        log(f"[!] Turnstile error: {e}")
+    # ── Detect Turnstile (multiple methods) ──────────────
+    has_turnstile = False
+    turnstile_solved = False
     
-    # Submit
+    # Method 1: Check for cf-turnstile container
+    try:
+        ts = page.locator(".cf-turnstile")
+        if ts.count() > 0:
+            has_turnstile = True
+            log("[+] Turnstile container found (.cf-turnstile)")
+    except: pass
+    
+    # Method 2: Check for iframe
+    try:
+        iframe = page.locator("iframe[src*='challenges.cloudflare.com']")
+        if iframe.count() > 0:
+            has_turnstile = True
+            log("[+] Turnstile iframe found")
+    except: pass
+    
+    # Method 3: Check for hidden input
+    try:
+        ts_input = page.locator("input[name='cf-turnstile-response']")
+        if ts_input.count() > 0:
+            has_turnstile = True
+            log("[+] Turnstile input found")
+    except: pass
+    
+    # Method 4: Check for sitekey in HTML/scripts
+    sitekey = _find_sitekey(page)
+    if sitekey:
+        has_turnstile = True
+        log(f"[+] Turnstile sitekey found: {sitekey}")
+    
+    if not has_turnstile:
+        log("[!] No Turnstile detected — submitting directly")
+    else:
+        # ── Wait for Turnstile to be ready ───────────────
+        log("[*] Waiting for Turnstile to load...")
+        
+        # Wait up to 30s for Turnstile to appear
+        turnstile_ready = False
+        for i in range(30):
+            time.sleep(1)
+            
+            # Check iframe
+            try:
+                iframe = page.locator("iframe[src*='challenges.cloudflare.com']")
+                if iframe.count() > 0:
+                    turnstile_ready = True
+                    log("[+] Turnstile iframe ready")
+                    break
+            except: pass
+            
+            # Check container
+            try:
+                ts = page.locator(".cf-turnstile")
+                if ts.count() > 0 and ts.is_visible():
+                    turnstile_ready = True
+                    log("[+] Turnstile container visible")
+                    break
+            except: pass
+            
+            if i % 5 == 4:
+                log(f"[*] Still waiting... ({i+1}s)")
+        
+        if not turnstile_ready:
+            log("[!] Turnstile not ready after 30s")
+        
+        # ── Try to click Turnstile ──────────────────────
+        time.sleep(2)
+        
+        # Method 1: Click inside iframe
+        try:
+            iframe = page.locator("iframe[src*='challenges.cloudflare.com']")
+            if iframe.count() > 0:
+                # Use frame_locator to access iframe content
+                tf = page.frame_locator("iframe[src*='challenges.cloudflare.com']")
+                
+                # Try checkbox
+                try:
+                    cb = tf.locator("input[type='checkbox']")
+                    cb.wait_for(state="visible", timeout=5000)
+                    cb.click()
+                    log("[+] Turnstile checkbox clicked")
+                except:
+                    # Try body click
+                    try:
+                        body = tf.locator("body")
+                        body.click(timeout=5000)
+                        log("[+] Turnstile body clicked")
+                    except:
+                        # Try direct iframe click (coordinates)
+                        try:
+                            box = iframe.bounding_box()
+                            if box:
+                                page.mouse.click(box["x"] + 25, box["y"] + 15)
+                                log("[+] Turnstile clicked via coordinates")
+                        except:
+                            log("[!] Could not click Turnstile")
+        except Exception as e:
+            log(f"[!] Turnstile click error: {e}")
+        
+        # ── Wait for auto-solve ─────────────────────────
+        log("[*] Waiting for Turnstile to solve...")
+        for i in range(20):
+            time.sleep(1)
+            try:
+                ts_input = page.locator("input[name='cf-turnstile-response']")
+                if ts_input.count() > 0:
+                    val = ts_input.get_attribute("value") or ""
+                    if len(val) > 10:
+                        turnstile_solved = True
+                        log(f"[+] Turnstile solved! Token: {val[:30]}...")
+                        break
+            except: pass
+            if i % 5 == 4:
+                log(f"[*] Waiting... ({i+1}s)")
+        
+        if not turnstile_solved:
+            # Try 2captcha
+            api_key = _config.get("captcha_api_key", "")
+            if api_key and sitekey:
+                log("[+] Solving via 2captcha...")
+                try:
+                    token = _solve_2captcha(sitekey, page.url)
+                    page.evaluate(f"document.querySelector('input[name=\"cf-turnstile-response\"]').value = '{token}'")
+                    log(f"[+] Token injected: {token[:30]}...")
+                    turnstile_solved = True
+                except Exception as e:
+                    log(f"[!] 2captcha error: {e}")
+            else:
+                log("[!] No captcha_api_key or sitekey")
+    
+    # ── Submit ──────────────────────────────────────────
+    if has_turnstile and not turnstile_solved:
+        log("[!] Turnstile NOT solved — submitting anyway (may fail)")
+    else:
+        log("[*] Submitting...")
+    
     page.locator("button[type='submit']").click()
     log("[+] Profile submitted")
     time.sleep(10)
     
     return {"given_name": first, "family_name": last, "password": password}
+
 
 def _find_sitekey(page):
     # From data-sitekey
