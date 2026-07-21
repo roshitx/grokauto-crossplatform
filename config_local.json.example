@@ -1,0 +1,4 @@
+{
+  "proxy": "gw.dataimpulse.com:10000:username:password",
+  "captcha_api_key": "your_2captcha_api_key"
+}

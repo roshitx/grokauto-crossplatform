@@ -9,3 +9,6 @@ dist/
 build/
 venv/
 .venv/
+config_local.json
+sso_cookie.json
+cookies.json
