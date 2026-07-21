@@ -2,7 +2,7 @@
 """
 grokauto CLI using Camoufox (anti-fingerprint Firefox).
 """
-import os, sys, json, time, requests
+import os, sys, json, time, re, random, string, requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -16,25 +16,45 @@ def log(msg):
     print(msg, flush=True)
 
 def cloudflare_create_temp_address(cfg):
-    base = cfg.get("cloudflare_base_url", "https://cf-temp-email.auliarasyidalzahrawi.workers.dev")
+    base = cfg.get("cloudflare_api_base", "https://cf-temp-email.auliarasyidalzahrawi.workers.dev")
     api_key = cfg.get("cloudflare_api_key", "R0SH1T_T3MP_M41L_2026")
     
-    import random, string
+    # Get domains
     r = requests.get(f"{base}/open_api/settings/domains",
         headers={"x-admin-auth": api_key}, timeout=30)
-    domains = r.json().get("domains", [])
+    log(f"[*] Domains API: {r.status_code}")
+    
+    if r.status_code != 200:
+        raise Exception(f"Domains API error: {r.status_code} {r.text[:200]}")
+    
+    try:
+        domains = r.json().get("domains", [])
+    except:
+        raise Exception(f"Domains API not JSON: {r.text[:200]}")
+    
+    if not domains:
+        raise Exception("No temp mail domains found")
+    
     domain = random.choice(domains)
     prefix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
     address = f"{prefix}@{domain}"
     
+    # Create address
     r = requests.post(f"{base}/open_api/settings/accounts",
         headers={"x-admin-auth": api_key, "Content-Type": "application/json"},
         json={"address": address, "password": "auto"}, timeout=30)
     
-    if r.status_code not in (200, 201):
-        raise Exception(f"Create address failed: {r.status_code}")
+    log(f"[*] Create API: {r.status_code}")
     
-    return {"jwt": r.json().get("jwt", ""), "address": address}
+    if r.status_code not in (200, 201):
+        raise Exception(f"Create address failed: {r.status_code} {r.text[:200]}")
+    
+    try:
+        jwt = r.json().get("jwt", "")
+    except:
+        jwt = ""
+    
+    return {"jwt": jwt, "address": address}
 
 def main():
     cfg = load_config()
