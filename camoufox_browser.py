@@ -119,11 +119,14 @@ def poll_for_code(address, log_callback=None, max_wait=90):
                 raw = msg.get("raw", "")
                 body = msg.get("body", "") or msg.get("text", "") or msg.get("html", "") or raw
                 subject = re.search(r'Subject:\s*([^\r\n]+)', raw).group(1) if re.search(r'Subject:\s*([^\r\n]+)', raw) else ""
+                # x.ai code format: XXX-XXX (uppercase alphanumeric)
                 for src in [subject, body]:
-                    m = re.search(r'([A-Z0-9]{3}-[A-Z0-9]{3})', src, re.I)
+                    m = re.search(r'confirmation code[:\s]+([A-Z0-9]{3}-[A-Z0-9]{3})', src)
                     if m: return m.group(1)
-                m = re.search(r'\b(\d{6})\b', body)
-                if m: return m.group(1)
+                # Fallback: any 3-3 uppercase alphanumeric
+                for src in [subject, body]:
+                    m = re.search(r'\b([A-Z0-9]{3}-[A-Z0-9]{3})\b', src)
+                    if m: return m.group(1)
         except: pass
     raise Exception("Tidak menerima kode verifikasi")
 
@@ -131,18 +134,33 @@ def fill_code_and_submit(code, log_callback=None):
     log = log_callback or (lambda msg: print(msg))
     page = get_page()
     code_clean = code.replace("-", "")
+    
+    # Strategy 1: Individual char inputs (maxlength=1)
     chars = page.locator("input[maxlength='1']")
     if chars.count() >= 6:
         log(f"[+] Using {chars.count()} individual inputs")
         for i, ch in enumerate(code_clean):
             if i < chars.count():
+                chars.nth(i).click()
                 chars.nth(i).fill(ch)
                 time.sleep(0.2)
     else:
-        otp = page.locator("input[type='text']")
+        # Strategy 2: OTP-specific inputs (exclude cookie search bar etc.)
+        otp = page.locator("input[autocomplete='one-time-code']")
+        if otp.count() == 0:
+            otp = page.locator("input[name*='code']")
+        if otp.count() == 0:
+            otp = page.locator("input[name*='otp']")
+        if otp.count() == 0:
+            # Last resort: look for inputs inside a form with submit, NOT cookie bar
+            otp = page.locator("form input[type='text']")
         if otp.count() > 0:
+            otp.first.click()
             otp.first.fill(code_clean)
             log("[+] Using single input")
+        else:
+            log("[!] No OTP input found!")
+    
     time.sleep(1)
     page.locator("button[type='submit']").click()
     log("[+] Code submitted")
