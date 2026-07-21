@@ -598,27 +598,38 @@ def fill_profile_and_submit(log_callback: Callable = None, cancel_callback: Call
         time.sleep(2)  # Let page settle
 
         # ── Solve Turnstile ──────────────────────────────
-        api_key = config.get("captcha_api_key", "")
-        if api_key:
-            try:
+        # Step 1: Try clicking the checkbox first (it's visible per screenshot)
+        _click_turnstile_checkbox(page, log)
+        time.sleep(5)  # Wait for auto-solve
+        
+        # Step 2: Check if Turnstile auto-solved
+        auto_token = _check_auto_turnstile(page, log)
+        if auto_token:
+            log(f"[+] Turnstile auto-solved! Token: {auto_token[:30]}...")
+        else:
+            log("[!] Turnstile did NOT auto-solve")
+            # Step 3: Solve via 2captcha
+            api_key = config.get("captcha_api_key", "")
+            if api_key:
                 sitekey = _find_turnstile_sitekey(page, log)
                 if sitekey:
                     page_url = page.url
                     log(f"[+] Solving Turnstile via 2captcha...")
                     token = solve_turnstile_2captcha(sitekey, page_url)
                     log(f"[+] Turnstile token: {token[:30]}...")
-                    inject_turnstile_token(page, token, log_callback=log)
-                    time.sleep(2)
+                    _inject_turnstile_token_proper(page, token, sitekey, log)
+                    time.sleep(3)
+                    # Verify token was accepted
+                    verify_token = _check_auto_turnstile(page, log)
+                    if verify_token:
+                        log(f"[+] Token verified after injection")
+                    else:
+                        log("[!] Token injection may have failed")
                 else:
                     log("[!] No Turnstile sitekey found")
-                    # Maybe Turnstile is invisible and auto-solved — check for token
-                    auto_token = _check_auto_turnstile(page, log)
-                    if auto_token:
-                        log(f"[+] Auto Turnstile token found ({len(auto_token)} chars)")
-                    else:
-                        log("[!] No auto Turnstile token either")
-            except Exception as e:
-                log(f"[!] Turnstile solve failed: {e}")
+            else:
+                log("[!] No captcha_api_key — cannot solve Turnstile")
+                log("[!] Set captcha_api_key in config.json")
         
         # Verify submit button is clickable (not blocked by Turnstile)
         btn = page.ele("css:button[type='submit']")
@@ -747,6 +758,108 @@ def _check_auto_turnstile(page, log) -> str:
     except Exception:
         pass
     return ""
+
+
+def _click_turnstile_checkbox(page, log) -> None:
+    """Click the Turnstile checkbox to trigger verification."""
+    try:
+        # Method 1: Find the checkbox inside Turnstile iframe
+        # Turnstile renders in an iframe from challenges.cloudflare.com
+        iframes = page.eles("css:iframe")
+        for iframe in iframes:
+            src = iframe.attr("src") or ""
+            if "challenges.cloudflare.com" in src or "turnstile" in src:
+                log(f"[+] Found Turnstile iframe: {src[:80]}...")
+                # Click inside the iframe
+                try:
+                    iframe.click()
+                    log("[+] Clicked Turnstile iframe")
+                    return
+                except Exception:
+                    pass
+        
+        # Method 2: Find the cf-turnstile container div and click it
+        cf_div = page.ele("css:.cf-turnstile")
+        if cf_div:
+            cf_div.click()
+            log("[+] Clicked cf-turnstile div")
+            return
+        
+        # Method 3: Find by "Verify you are human" text
+        verify_el = page.ele("text=Verify you are human")
+        if verify_el:
+            # Click near it (the checkbox)
+            verify_el.click()
+            log("[+] Clicked 'Verify you are human'")
+            return
+        
+        # Method 4: Click the first checkbox near turnstile
+        checkbox = page.ele("css:div[style*='turnstile'] input[type='checkbox']")
+        if not checkbox:
+            checkbox = page.ele("css:input[type='checkbox']")
+        if checkbox:
+            checkbox.click()
+            log("[+] Clicked checkbox")
+            return
+        
+        log("[!] Could not find Turnstile checkbox to click")
+    except Exception as e:
+        log(f"[!] Click turnstile checkbox error: {e}")
+
+
+def _inject_turnstile_token_proper(page, token: str, sitekey: str, log) -> bool:
+    """Properly inject Turnstile token — set hidden input AND trigger callback."""
+    try:
+        # Set hidden input value
+        page.run_js(f"""
+            var el = document.querySelector('input[name="cf-turnstile-response"]');
+            if (el) {{
+                el.value = '{token}';
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}
+        """)
+        
+        # Also try to trigger the Turnstile widget callback
+        page.run_js(f"""
+            var widgetId = null;
+            // Find widget ID from the container
+            var container = document.querySelector('[data-sitekey="{sitekey}"]');
+            if (!container) container = document.querySelector('.cf-turnstile');
+            
+            if (window.turnstile && container) {{
+                // Get all widget IDs
+                try {{
+                    // Try to execute with the token
+                    window.turnstile.execute(container, '{token}');
+                }} catch(e) {{
+                    try {{
+                        // Alternative: reset and set response
+                        window.turnstile.reset();
+                    }} catch(e2) {{
+                        // Ignore
+                    }}
+                }}
+            }}
+            
+            // Also set __turnstileResp if it exists
+            if (typeof window.__turnstileResp !== 'undefined') {{
+                window.__turnstileResp = '{token}';
+            }}
+            
+            // Trigger any callbacks on the container
+            if (container) {{
+                var event = new CustomEvent('turnstile-verify', {{ detail: {{ token: '{token}' }} }});
+                container.dispatchEvent(event);
+            }}
+        """)
+        
+        log("[+] Token injected with callback trigger")
+        return True
+    except Exception as e:
+        log(f"[!] Proper token injection failed: {e}")
+        return False
+
 
 def wait_for_sso_cookie(log_callback: Callable = None, cancel_callback: Callable = None, timeout: int = 60) -> str:
     """Wait for SSO cookie to appear. Returns SSO token string."""
