@@ -29,7 +29,7 @@ def load_config():
         print(f"[*] Fixing config.json from git...")
         # Try to re-read from clean source
         _config = {
-            "cloudflare_base_url": "https://cf-temp-email.auliarasyidalzahrawi.workers.dev",
+            "cloudflare_api_base": "https://cf-temp-email.auliarasyidalzahrawi.workers.dev",
             "cloudflare_api_key": "R0SH1T_T3MP_M41L_2026",
             "proxy": "",
             "headless": False,
@@ -106,7 +106,7 @@ def fill_email_and_submit(email, log_callback=None):
 def poll_for_code(address, log_callback=None, max_wait=90):
     log = log_callback or (lambda msg: print(msg))
     import requests as req
-    base = _config.get("cloudflare_base_url", "https://cf-temp-email.auliarasyidalzahrawi.workers.dev")
+    base = _config.get("cloudflare_api_base", "https://cf-temp-email.auliarasyidalzahrawi.workers.dev")
     api_key = _config.get("cloudflare_api_key", "R0SH1T_T3MP_M41L_2026")
     
     for _ in range(max_wait // 3):

@@ -54,7 +54,7 @@ def cloudflare_create_temp_address(cfg):
     except:
         jwt = ""
     
-    return {"jwt": jwt, "name": address}
+    return {"jwt": jwt, "address": address}
 
 def main():
     cfg = load_config()
