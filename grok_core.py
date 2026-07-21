@@ -639,6 +639,38 @@ def fill_profile_and_submit(log_callback: Callable = None, cancel_callback: Call
 
     profile = {"given_name": first, "family_name": last, "password": password}
 
+    # ── WAIT for profile form to load ──────────────────────
+    # After OTP submit, page transitions to profile form
+    # We must wait for the form elements to appear before filling
+    log("[*] Waiting for profile form to load...")
+    form_ready = False
+    for attempt in range(30):  # max 30s
+        time.sleep(1)
+        try:
+            fn = page.ele("css:input[name='givenName']")
+            ln = page.ele("css:input[name='familyName']")
+            pw = page.ele("css:input[type='password']")
+            if fn and ln and pw:
+                form_ready = True
+                log(f"[+] Profile form ready (attempt {attempt + 1})")
+                break
+            # Check if we're still on OTP page
+            otp_input = page.ele("css:input[maxlength='1']")
+            if otp_input:
+                log("[*] Still on OTP page, waiting...")
+                continue
+        except Exception:
+            pass
+    
+    if not form_ready:
+        log("[!] Profile form did not load within 30s")
+        # Take screenshot for debug
+        try:
+            page.get_screenshot(path="/tmp/profile_form_debug.png")
+            log("[*] Screenshot saved: /tmp/profile_form_debug.png")
+        except Exception:
+            pass
+
     try:
         # Fill first name
         fn_input = page.ele("css:input[name='givenName']")
@@ -661,38 +693,54 @@ def fill_profile_and_submit(log_callback: Callable = None, cancel_callback: Call
         time.sleep(2)  # Let page settle
 
         # ── Solve Turnstile ──────────────────────────────
-        # Step 1: Try clicking the checkbox first (it's visible per screenshot)
-        _click_turnstile_checkbox(page, log)
-        time.sleep(5)  # Wait for auto-solve
+        # Step 1: Wait for Turnstile widget to load
+        turnstile_loaded = False
+        for _ in range(10):
+            iframes = page.eles("css:iframe")
+            for iframe in iframes:
+                src = iframe.attr("src") or ""
+                if "challenges.cloudflare.com" in src or "turnstile" in src:
+                    turnstile_loaded = True
+                    break
+            if turnstile_loaded:
+                break
+            time.sleep(1)
         
-        # Step 2: Check if Turnstile auto-solved
-        auto_token = _check_auto_turnstile(page, log)
-        if auto_token:
-            log(f"[+] Turnstile auto-solved! Token: {auto_token[:30]}...")
-        else:
-            log("[!] Turnstile did NOT auto-solve")
-            # Step 3: Solve via 2captcha
-            api_key = config.get("captcha_api_key", "")
-            if api_key:
-                sitekey = _find_turnstile_sitekey(page, log)
-                if sitekey:
-                    page_url = page.url
-                    log(f"[+] Solving Turnstile via 2captcha...")
-                    token = solve_turnstile_2captcha(sitekey, page_url)
-                    log(f"[+] Turnstile token: {token[:30]}...")
-                    _inject_turnstile_token_proper(page, token, sitekey, log)
-                    time.sleep(3)
-                    # Verify token was accepted
-                    verify_token = _check_auto_turnstile(page, log)
-                    if verify_token:
-                        log(f"[+] Token verified after injection")
-                    else:
-                        log("[!] Token injection may have failed")
-                else:
-                    log("[!] No Turnstile sitekey found")
+        if turnstile_loaded:
+            log("[+] Turnstile widget loaded")
+            # Step 2: Try clicking the checkbox
+            _click_turnstile_checkbox(page, log)
+            time.sleep(5)  # Wait for auto-solve
+            
+            # Step 3: Check if Turnstile auto-solved
+            auto_token = _check_auto_turnstile(page, log)
+            if auto_token:
+                log(f"[+] Turnstile auto-solved! Token: {auto_token[:30]}...")
             else:
-                log("[!] No captcha_api_key — cannot solve Turnstile")
-                log("[!] Set captcha_api_key in config.json")
+                log("[!] Turnstile did NOT auto-solve")
+                # Step 4: Solve via 2captcha
+                api_key = config.get("captcha_api_key", "")
+                if api_key:
+                    sitekey = _find_turnstile_sitekey(page, log)
+                    if sitekey:
+                        page_url = page.url
+                        log(f"[+] Solving Turnstile via 2captcha...")
+                        token = solve_turnstile_2captcha(sitekey, page_url)
+                        log(f"[+] Turnstile token: {token[:30]}...")
+                        _inject_turnstile_token_proper(page, token, sitekey, log)
+                        time.sleep(3)
+                        # Verify token was accepted
+                        verify_token = _check_auto_turnstile(page, log)
+                        if verify_token:
+                            log(f"[+] Token verified after injection")
+                        else:
+                            log("[!] Token injection may have failed")
+                    else:
+                        log("[!] No Turnstile sitekey found")
+                else:
+                    log("[!] No captcha_api_key — cannot solve Turnstile")
+        else:
+            log("[!] Turnstile widget not found — proceeding without")
         
         # Verify submit button is clickable (not blocked by Turnstile)
         btn = page.ele("css:button[type='submit']")
