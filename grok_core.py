@@ -594,49 +594,159 @@ def fill_profile_and_submit(log_callback: Callable = None, cancel_callback: Call
         if pw_input:
             pw_input.clear()
             pw_input.input(password)
+        
+        time.sleep(2)  # Let page settle
 
-        # Solve Turnstile before submit
+        # ── Solve Turnstile ──────────────────────────────
         api_key = config.get("captcha_api_key", "")
         if api_key:
             try:
-                # Detect Turnstile sitekey
-                sitekey = None
-                sitekey_el = page.ele("css:[data-sitekey]")
-                if sitekey_el:
-                    sitekey = sitekey_el.attr("data-sitekey")
-                    log(f"[+] Turnstile sitekey: {sitekey}")
-                
-                if not sitekey:
-                    # Try to find in HTML
-                    import re
-                    html = page.html
-                    m = re.search(r'data-sitekey="([^"]+)"', html)
-                    if m:
-                        sitekey = m.group(1)
-                        log(f"[+] Turnstile sitekey from HTML: {sitekey}")
-                
+                sitekey = _find_turnstile_sitekey(page, log)
                 if sitekey:
                     page_url = page.url
                     log(f"[+] Solving Turnstile via 2captcha...")
                     token = solve_turnstile_2captcha(sitekey, page_url)
-                    log(f"[+] Turnstile token obtained ({len(token)} chars)")
+                    log(f"[+] Turnstile token: {token[:30]}...")
                     inject_turnstile_token(page, token, log_callback=log)
                     time.sleep(2)
                 else:
-                    log("[!] No Turnstile sitekey found, proceeding without solve")
+                    log("[!] No Turnstile sitekey found")
+                    # Maybe Turnstile is invisible and auto-solved — check for token
+                    auto_token = _check_auto_turnstile(page, log)
+                    if auto_token:
+                        log(f"[+] Auto Turnstile token found ({len(auto_token)} chars)")
+                    else:
+                        log("[!] No auto Turnstile token either")
             except Exception as e:
                 log(f"[!] Turnstile solve failed: {e}")
-                log("[!] Proceeding without Turnstile token")
         
-        # Submit
+        # Verify submit button is clickable (not blocked by Turnstile)
         btn = page.ele("css:button[type='submit']")
         if btn:
             btn.click()
-            time.sleep(3)
+            time.sleep(5)
+            log("[+] Profile submitted")
+            
+            # Check if we actually navigated (turnstile might block)
+            url_after = page.url
+            log(f"[*] Current URL: {url_after}")
+            if "sign-up" in url_after and "name" not in url_after.lower():
+                # Might still be on signup page — turnstile might have blocked
+                log("[!] May still be on signup page — Turnstile might have blocked submit")
     except Exception as e:
         log(f"[!] Error filling profile: {e}")
 
     return profile
+
+
+def _find_turnstile_sitekey(page, log) -> str:
+    """Find Turnstile sitekey from DOM, iframes, JS, or network."""
+    import re
+    
+    # Method 1: data-sitekey attribute
+    el = page.ele("css:[data-sitekey]")
+    if el:
+        sk = el.attr("data-sitekey")
+        log(f"[+] sitekey from data-sitekey attr: {sk}")
+        return sk
+    
+    # Method 2: HTML regex
+    html = page.html
+    m = re.search(r'data-sitekey="([^"]+)"', html)
+    if m:
+        log(f"[+] sitekey from HTML: {m.group(1)}")
+        return m.group(1)
+    
+    # Method 3: Check turnstile iframe src
+    iframes = page.eles("css:iframe")
+    for iframe in iframes:
+        src = iframe.attr("src") or ""
+        m = re.search(r'sitekey[=/]([A-Za-z0-9_-]+)', src, re.I)
+        if m:
+            log(f"[+] sitekey from iframe src: {m.group(1)}")
+            return m.group(1)
+        # Also check for k= parameter (turnstile uses this)
+        m = re.search(r'[?&]k=([^&]+)', src)
+        if m:
+            log(f"[+] sitekey from iframe k= param: {m.group(1)}")
+            return m.group(1)
+    
+    # Method 4: Check JS globals
+    try:
+        result = page.run_js("""
+            var sk = null;
+            // Check window.turnstile
+            if (window.turnstile && window.turnstile.getResponse) {
+                try { sk = window.turnstile.getResponse(); } catch(e) {}
+            }
+            // Check __NEXT_DATA__ for sitekey
+            var nd = document.getElementById('__NEXT_DATA__');
+            if (nd) {
+                var text = nd.textContent;
+                var m = text.match(/sitekey['":\\s]+['"]([^'"]+)['"]/i);
+                if (m) sk = m[1];
+            }
+            // Check all divs
+            var divs = document.querySelectorAll('div[data-sitekey]');
+            if (divs.length > 0) sk = divs[0].getAttribute('data-sitekey');
+            return sk;
+        """)
+        if result and isinstance(result, str) and len(result) > 5:
+            log(f"[+] sitekey from JS: {result}")
+            return result
+    except Exception:
+        pass
+    
+    # Method 5: Well-known x.ai sitekey (common for xAI/SpaceX)
+    # These are often publicly visible in client-side code
+    try:
+        result = page.run_js("""
+            var scripts = document.querySelectorAll('script');
+            for (var i = 0; i < scripts.length; i++) {
+                var src = scripts[i].src || '';
+                var text = scripts[i].textContent || '';
+                var combined = src + text;
+                var m = combined.match(/0x4[A-Za-z0-9]{20,}/);
+                if (m) return m[0];
+            }
+            return null;
+        """)
+        if result and isinstance(result, str):
+            log(f"[+] sitekey from scripts: {result}")
+            return result
+    except Exception:
+        pass
+    
+    return None
+
+
+def _check_auto_turnstile(page, log) -> str:
+    """Check if Turnstile auto-solved (invisible mode)."""
+    try:
+        # Check cf-turnstile-response hidden input
+        resp = page.ele("css:input[name='cf-turnstile-response']")
+        if resp:
+            val = resp.attr("value") or ""
+            if val and len(val) > 10:
+                return val
+        
+        # Check via JS
+        result = page.run_js("""
+            var el = document.querySelector('input[name="cf-turnstile-response"]');
+            if (el && el.value && el.value.length > 10) return el.value;
+            if (window.turnstile) {
+                try { 
+                    var r = window.turnstile.getResponse();
+                    if (r && r.length > 10) return r;
+                } catch(e) {}
+            }
+            return null;
+        """)
+        if result and isinstance(result, str) and len(result) > 10:
+            return result
+    except Exception:
+        pass
+    return ""
 
 def wait_for_sso_cookie(log_callback: Callable = None, cancel_callback: Callable = None, timeout: int = 60) -> str:
     """Wait for SSO cookie to appear. Returns SSO token string."""
